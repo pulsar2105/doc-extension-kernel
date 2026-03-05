@@ -58,6 +58,47 @@ Dans mon cas :
       BAR4: 64 bit prefetchable memory at 0xffffffffffffffff [0x00003ffe].
       id ""`
 
+## Recherche du device PCI
+
+Ce qui nous permet de déduire que le `vendor_id` et le `device_id` de la carte audio sont respectivement `0x1af4` et `0x1059`.
+Nous allons nous servir de ça pour rechercher l'adresse de configuration du périphérique PCI comme précédement avec la carte graphique.
+
+Le `device_id` est `0x1059` car selon la doc Oasis section 4.1.2.1 et 5 le `device_id` est calculé en ajouter à `0x1040` l'id du type device.
+Ici le device est `Sound device` avec l'id 25 (base 10) et 0x1040 + 0x19 = 0x1059.
+
+## Configuration PCI
+
+D'après la page wikipédia qui est basé sur un article d'un blog de dev OS (cf biblio) pour configurer le device PCI nous devons indiquer plusieurs chose :
+
+- les autorisations dans le registres `command`, ici 0b111 => bit 0 = 1 : autoriser les entrées sorties, bit 1 = 1 : autorise l'accès de notre part à la mémoire,
+  bit 2 = 1 : autorise l'accès du device à la mémoire qui lui est attribué.
+- l'adresse mémoire pour la configuration
+- l'adresse mémoire pour l'utilisation
+
+Pour indiquer les adresses mémoires d'après les informations données par `info qtree` dans la console QEMU il faut :
+
+- placer la première valeur `BAR 1` à l'adresse PCI_AUDIO + 0x14
+- placer la seconde valeur `BAR 4` à l'adresse PCI_ADUIO + 0x20
+
+Le tout est analogue à la première configuration de la carte graphique et doit impérativement respecter l'alignement de 4 octet de la zone de spécification.  
+On doit ainsi obtenir dans la console QEMU :  
+`class Audio controller, addr 00:02.0, pci id 1af4:1059 (sub 1af4:1100)
+bar 1: mem at 0x70000000 [0x70000fff]
+bar 4: mem at 0x60000000 [0x60003fff]
+bus: virtio-bus
+type virtio-pci-bus
+dev: virtio-sound-device, id ""`  
+
+J'ai choisie les adresses de manières arbitraire.  
+
 ## Biblio
 
+Configuration de QEMU :  
 https://www.qemu.org/docs/master/system/devices/virtio/virtio-snd.html
+
+Documentation générale des virtio :  
+https://docs.oasis-open.org/virtio/virtio/v1.3/csd01/virtio-v1.3-csd01.pdf
+
+Pour la configue PCI :  
+https://en.wikipedia.org/wiki/PCI_configuration_space#Standardized_registers
+https://wiki.osdev.org/PCI#Command_Register
