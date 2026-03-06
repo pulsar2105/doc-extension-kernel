@@ -77,8 +77,8 @@ D'après la page wikipédia qui est basé sur un article d'un blog de dev OS (cf
 
 Pour indiquer les adresses mémoires d'après les informations données par `info qtree` dans la console QEMU il faut :
 
-- placer la première valeur `BAR 1` à l'adresse PCI_AUDIO + 0x14
-- placer la seconde valeur `BAR 4` à l'adresse PCI_ADUIO + 0x20
+- placer la première valeur `BAR 1` à l'adresse `PCI_AUDIO + 0x14`
+- placer la seconde valeur `BAR 4` à l'adresse `PCI_ADUIO + 0x20`
 
 Le tout est analogue à la première configuration de la carte graphique et doit impérativement respecter l'alignement de 4 octet de la zone de spécification.  
 On doit ainsi obtenir dans la console QEMU :  
@@ -87,9 +87,13 @@ bar 1: mem at 0x70000000 [0x70000fff]
 bar 4: mem at 0x60000000 [0x60003fff]
 bus: virtio-bus
 type virtio-pci-bus
-dev: virtio-sound-device, id ""`  
+dev: virtio-sound-device, id ""`
 
-J'ai choisie les adresses de manières arbitraire.  
+J'ai choisie les adresses de manières arbitraire.
+
+On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions propre par la suite.  
+Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminé à l'avance, ici `33`.
+Cette valeur d'après le code source de QEMU doit être entre 32 et 35 (cf Biblio).
 
 ## Biblio
 
