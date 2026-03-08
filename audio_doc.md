@@ -144,7 +144,51 @@ struct virtio_pci_cap {
 ```
 
 Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).  
-Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.
+Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.  
+
+ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.  
+
+## VIRTIO 
+
+### Initilisation
+
+#### Adresse de configuration
+
+Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 2).  
+Pour ce faire nous devons accéder à l'adresse de configuration du périphérique et nous allons utiliser les renseignements données par le `Capabilities Pointer`.
+En effet, il suffit de :  
+- parcourir la liste chainée de capabilities et cherche l'élément où `cfg_type` est `VIRTIO_PCI_CAP_COMMON_CFG` (sec 4.1.4 biblio 1).  
+- récupérer l'adresse de base `bar` et l'`offset` associé à cette adresse  
+- masquer le permier octet de `bar` qui indique le type de mémoire (https://wiki.osdev.org/PCI#Base_Address_Registers)  
+- calculer l'adresse (`bar` masqué) + `offset`  
+
+Un fois configurer nous allons nous servir de la structure suivante pour accéder au paramètre (sec 4.1.4.3, biblio 1) :  
+
+```
+struct virtio_pci_common_cfg {
+    /* About the whole device. */
+    le32 device_feature_select; /* read-write */
+    le32 device_feature;        /* read-only for driver */
+    le32 driver_feature_select; /* read-write */
+    le32 driver_feature;        /* read-write */
+    le16 config_msix_vector;    /* read-write */
+    le16 num_queues;            /* read-only for driver */
+    u8 device_status;           /* read-write */
+    u8 config_generation;       /* read-only for driver */
+
+    /* About a specific virtqueue. */
+    le16 queue_select;          /* read-write */
+    le16 queue_size;            /* read-write */
+    le16 queue_msix_vector;     /* read-write */
+    le16 queue_enable;          /* read-write */
+    le16 queue_notify_off;      /* read-only for driver */
+    le64 queue_desc;            /* read-write */
+    le64 queue_driver;          /* read-write */
+    le64 queue_device;          /* read-write */
+    le16 queue_notify_data;     /* read-only for driver */
+    le16 queue_reset;           /* read-write */
+};
+```
 
 ## Biblio
 
