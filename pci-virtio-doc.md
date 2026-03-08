@@ -3,12 +3,13 @@
 ## Conventions Oasis
 
 ### Types
+
 u8, u16, u32, u64  
-    Un entier non signé de taille en bits spécifique.  
+ Un entier non signé de taille en bits spécifique.  
 le16, le32, le64  
-     Un entier non signé de taille en bits spécifique, format little-endian.  
+ Un entier non signé de taille en bits spécifique, format little-endian.  
 be16, be32, be64  
-     Un entier non signé de taille en bits spécifique, format big-endian.  
+ Un entier non signé de taille en bits spécifique, format big-endian.
 
 ## Lister les périphérique disponible
 
@@ -87,9 +88,9 @@ Ici le device est `Sound device` avec l'id 25 (base 10) et 0x1040 + 0x19 = 0x105
 
 ## Configuration PCI
 
-D'après un article de blog de dev OS (cf 3) le type de header PCI dépend du device utilisé. Ici pour le device son le header est du type `0x0`, car info pci indique `BAR1`/`BAR4`.  
+D'après un article de blog de dev OS (cf 3) le type de header PCI dépend du device utilisé. Ici pour le device son le header est du type `0x0`, car info pci indique `BAR1`/`BAR4`.
 
-Pour pouvoir configurer ce périiphérique il faut spécifier certaines chose :  
+Pour pouvoir configurer ce périiphérique il faut spécifier certaines chose :
 
 ### Command
 
@@ -127,28 +128,28 @@ Cette valeur d'après le code source de QEMU doit être entre 32 et 35 (cf Bibli
 ### Capabilities Pointer
 
 Le `Capabilities Pointer` situé à un offset de `0x34` dans le header PCI est un pointer vers l'espace de configuration du device PCI.  
-Cet espace de configuration est une liste de capabilities où chaque élément à la structure suivante (sec 4.1.4, biblio 1) :  
+Cet espace de configuration est une liste de capabilities où chaque élément à la structure suivante (sec 4.1.4, biblio 1) :
 
 ```
-struct virtio_pci_cap { 
-    u8 cap_vndr;    /* Generic PCI field: PCI_CAP_ID_VNDR */ 
-    u8 cap_next;    /* Generic PCI field: next ptr. */ 
-    u8 cap_len;     /* Generic PCI field: capability length */ 
-    u8 cfg_type;    /* Identifies the structure. */ 
-    u8 bar;         /* Where to find it. */ 
-    u8 id;          /* Multiple capabilities of the same type */ 
-    u8 padding[2];  /* Pad to full dword. */ 
-    le32 offset;    /* Offset within bar. */ 
-    le32 length;    /* Length of the structure, in bytes. */ 
+struct virtio_pci_cap {
+    u8 cap_vndr;    /* Generic PCI field: PCI_CAP_ID_VNDR */
+    u8 cap_next;    /* Generic PCI field: next ptr. */
+    u8 cap_len;     /* Generic PCI field: capability length */
+    u8 cfg_type;    /* Identifies the structure. */
+    u8 bar;         /* Where to find it. */
+    u8 id;          /* Multiple capabilities of the same type */
+    u8 padding[2];  /* Pad to full dword. */
+    le32 offset;    /* Offset within bar. */
+    le32 length;    /* Length of the structure, in bytes. */
 };
 ```
 
 Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).  
-Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.  
+Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.
 
-ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.  
+ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.
 
-## VIRTIO 
+## VIRTIO
 
 ### Initilisation
 
@@ -156,13 +157,14 @@ ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.
 
 Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 2).  
 Pour ce faire nous devons accéder à l'adresse de configuration du périphérique et nous allons utiliser les renseignements données par le `Capabilities Pointer`.
-En effet, il suffit de :  
-- parcourir la liste chainée de capabilities et cherche l'élément où `cfg_type` est `VIRTIO_PCI_CAP_COMMON_CFG` (sec 4.1.4 biblio 1).  
-- récupérer l'adresse de base `bar` et l'`offset` associé à cette adresse  
-- masquer le permier octet de `bar` qui indique le type de mémoire (https://wiki.osdev.org/PCI#Base_Address_Registers)  
-- calculer l'adresse (`bar` masqué) + `offset`  
+En effet, il suffit de :
 
-Un fois configurer nous allons nous servir de la structure suivante pour accéder au paramètre (sec 4.1.4.3, biblio 1) :  
+- parcourir la liste chainée de capabilities et cherche l'élément où `cfg_type` est `VIRTIO_PCI_CAP_COMMON_CFG` (sec 4.1.4 biblio 1).
+- récupérer l'adresse de base `bar` et l'`offset` associé à cette adresse
+- masquer le permier octet de `bar` qui indique le type de mémoire (https://wiki.osdev.org/PCI#Base_Address_Registers)
+- calculer l'adresse (`bar` masqué) + `offset`
+
+Un fois configurer nous allons nous servir de la structure suivante pour accéder au paramètre et initiliser l'audio (sec 4.1.4.3, biblio 1) :
 
 ```
 struct virtio_pci_common_cfg {
@@ -189,6 +191,29 @@ struct virtio_pci_common_cfg {
     le16 queue_reset;           /* read-write */
 };
 ```
+
+Valeur utile pour la suite :
+
+```
+#define VIRTIO_STATUS_ACKNOWLEDGE 1
+#define VIRTIO_STATUS_DRIVER 2
+#define VIRTIO_STATUS_DRIVER_OK 4
+#define VIRTIO_STATUS_FEATURES_OK 8
+#define VIRTIO_STATUS_FAILED 128
+```
+
+L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étapes (spec 3.1 biblio 2) :
+
+- 1: Reset du device
+- 2: Activer le bit status `ACKNOWLEDGE`: l'OS a vu le device, "coucou"
+- 3: Activer le bit `DRIVER` : l'OS sait comment utiliser le device
+- 4: Lire les bits de fonctionnalité and écrire les fonctionnalité reconnus par l'OS et le driver. Il est recommander de lire avant les fonctionnalité supporté dans l'espace de configuration spécifique du device.
+- 5: Activer le bit de `FEATURE_OK`. Et le driver ne doit pas accepter de nouveau bits de fonctionnalité après cela.
+- 6: Re-lire le `device status` pour vérifier que le bit `FEATURE_OK` est toujours à 1: autrement le device ne supporte pas les fonctionnalités demandé et n'est pas utilisable.
+- 7: Effectuer la configuration spécifique au device, y compris la découverte des files d'attente virtuelles, virtqueues, pour le device, la configuration facultative par bus, la lecture et éventuellement l'écriture de l'espace de configuration virtio du device, et le remplissage des files d'attente virtuelles.
+- 8: Activer le bit d'état DRIVER_OK. À ce stade, le périphérique est "actif".
+
+Chaque étape demande ça propre partie.
 
 ## Biblio
 
