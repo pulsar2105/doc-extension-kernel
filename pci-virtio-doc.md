@@ -155,7 +155,7 @@ ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.
 
 #### Adresse de configuration
 
-Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 2).  
+Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 1).  
 Pour ce faire nous devons accéder à l'adresse de configuration du périphérique et nous allons utiliser les renseignements données par le `Capabilities Pointer`.
 En effet, il suffit de :
 
@@ -202,7 +202,7 @@ Valeur utile pour la suite :
 #define VIRTIO_STATUS_FAILED 128
 ```
 
-L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étapes (spec 3.1 biblio 2) :
+L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étapes (spec 3.1 biblio 1) :
 
 - 1: Reset du device
 - 2: Activer le bit status `ACKNOWLEDGE`: l'OS a vu le device, "coucou"
