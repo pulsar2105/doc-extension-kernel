@@ -51,6 +51,12 @@ Ces régles sont précisées dans `QEMUOPTSPRUNGS` dans le makefile. Ainsi on pe
 
 ## PCI
 
+## Point mémoire
+
+ATTENTION : Comme le précise la documentation (spec 4.1.3.1 biblio 1) tous les accès mémoire doivent correspondre à la taille du champs lu et doivent être alignés.
+
+## Info générales
+
 En ajoutant ces options on ajoute un périphérique audio pci.
 Pour voir où il se trouve on exécute `make rung` et en suite `Ctrl-A + Ctrl-C` pour rentrer dans la console QEMU.
 Ensuite on entre `info pci` et peut voir tous les périphériques PCI présent avec leur information réspéctive.
