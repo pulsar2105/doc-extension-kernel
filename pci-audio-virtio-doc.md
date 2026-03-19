@@ -1,4 +1,4 @@
-# Documentation périphérique audio
+# Documentation périphériques audio
 
 ## Conventions Oasis
 
@@ -128,8 +128,9 @@ J'ai choisie les adresses de manières arbitraire mais en gardant en tête que l
 ### IRQ
 
 On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions propre par la suite.
-Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminé à l'avance, ici `33`.
-Cette valeur d'après le code source de QEMU doit être entre 32 et 35 (cf Biblio).
+Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminé à l'avance.
+Pour déterminer la valeur de l'IRQ il faut préciser le pin d'interruption, 1 pour `INTA#` et le numéro du device PCI.
+Ainsi `IRQ = 32 + (device + pin)%4`
 
 ### Capabilities Pointer
 
@@ -220,6 +221,8 @@ L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étap
 - 8: Activer le bit d'état DRIVER_OK. À ce stade, le périphérique est "actif".
 
 Chaque étape demande ça propre partie.
+
+## Etape 1 : Reset
 
 ## Biblio
 
