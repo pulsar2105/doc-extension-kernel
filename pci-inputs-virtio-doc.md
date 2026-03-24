@@ -4,17 +4,17 @@
 
 ### Types
 
-u8, u16, u32, u64  
- Un entier non signé de taille en bits spécifique.  
-le16, le32, le64  
- Un entier non signé de taille en bits spécifique, format little-endian.  
-be16, be32, be64  
- Un entier non signé de taille en bits spécifique, format big-endian.
+u8, u16, u32, u64
+Un entier non signé de taille en bits spécifique.
+le16, le32, le64
+Un entier non signé de taille en bits spécifique, format little-endian.
+be16, be32, be64
+Un entier non signé de taille en bits spécifique, format big-endian.
 
 ## Lister les périphérique disponible
 
-On peut lister les périphériques clavier/souris disponible sur la machine avec la commande `qemu-system-x86_64 -device help | grep <my_device>` (remplacer par `mouse` ou `keyboard`).  
-Dans mon cas j'ai par exemple pour le clavier et la souris respectivement :
+On peut lister les périphériques clavier/souris disponibles sur la machine avec la commande `qemu-system-x86_64 -device help | grep <my_device>` (remplacer par `mouse` ou `keyboard`).
+Dans mon cas, j'ai par exemple pour le clavier et la souris respectivement :
 
 ```
 name "virtio-keyboard-device", bus virtio-bus
@@ -27,7 +27,7 @@ name "virtio-mouse-device", bus virtio-bus
 name "virtio-mouse-pci", bus PCI, alias "virtio-mouse"
 ```
 
-Pour ajouter les périphériques inputs (clavier/souris) on doit ajouter les device comme ce-ci :
+Pour ajouter les périphériques inputs (clavier/souris), on doit ajouter les devices comme ceci :
 
 ```
 -device virtio-keyboard-pci \
@@ -40,19 +40,20 @@ Ces régles sont précisées dans le makefile dans la rêgles : `DEVICE_KEYBOARD
 
 ## Point mémoire
 
-ATTENTION : Comme le précise la documentation (spec 4.1.3.1 biblio 1) tous les accès mémoire doivent correspondre à la taille du champs lu et doivent être alignés.
-Donc en C il est OBLIGATOIRE d'ajouter ici `__attribute__((packed, aligned(4)))` au structure mémoire utilisées.
+ATTENTION : Comme le précise la documentation (spec 4.1.3.1 biblio 1) tous les accès mémoire doivent correspondre à la taille du champ lu et doivent être alignés.
+Donc en C il est OBLIGATOIRE d'ajouter ici `__attribute__((packed, aligned(4)))` aux structures mémoire utilisées.
 
 - `packed` interdit l'ajout de padding entre les champs de la struct. La struct est "tassée".
 - `aligned(4)` demande au compilo d'aligner la structure sur 4 octet.
-  En résumé : les structures sont aligné sur 4 octets et bien tassées donc sous réserve que chaque champs des structs soient alignés correctement entre eux tous les accès mémoires réalisé seront alignés.
+  En résumé : les structures sont alignées sur 4 octets et bien tassées, donc sous réserve que chaque champs des structs soit aligné correctement entre eux, tous les accès mémoires réalisés seront alignés.
   Après vérification rapide, il semble que toutes les structs Virtio sont correctement alignées.
 
 ## Info générales
 
-En ajoutant ces options à QEMU on vient d'ajouter les périphériques claiver et souris pci. Pas d'USB ici dieu m'en garde.  
-Pour voir où il se trouve on exécute `make run` et en suite `Ctrl-A + Ctrl-C` pour rentrer dans la console QEMU.
-Ensuite on entre `info pci` et peut voir tous les périphériques PCI présent avec leur information réspéctive.
+En ajoutant ces options à QEMU, on vient d'ajouter les périphériques clavier et souris PCI. Pas d'USB ici, Dieu m'en garde.
+Pour voir où il se trouve, on exécute `make run` et ensuite `Ctrl-A + Ctrl-C` pour rentrer dans la console QEMU.
+Ensuite on entre `info pci` et peut voir tous les périphériques PCI présents avec leur information réspéctive.
+
 Dans mon cas :
 
 ```
@@ -76,25 +77,25 @@ Dans mon cas :
       id ""
 ```
 
-À noter ici qu'étant donner que j'ai déja fait le programme tous les champs PCI affiché (`BAR0`, `IRQ`) sont déjà configurés.
+À noter ici qu'étant donné que j'ai déjà fait le programme, tous les champs PCI affichés (`BAR0`, `IRQ`) sont déjà configurés.
 
 ## Recherche du device PCI
 
 Ce qui nous permet de déduire que le `vendor_id` et le `device_id` des devices inputs sont respectivement `0x1af4` et `0x1052`.
-Nous allons nous servir de ça pour rechercher les adresses de configurations des périphériques PCI comme précédement avec la carte graphique.  
-Le `device_id` est `0x1052` car le `device_id` est calculé en ajouter à `0x1040` l'id du type device et le `vendor_id` est `0x1af4` car c'est un périphérique virtio (sec 4.1.2 et 5 biblio 1).  
+Nous allons nous servir de ça pour rechercher les adresses de configurations des périphériques PCI comme précédemment avec la carte graphique.
+Le `device_id` est `0x1052` car le `device_id` est calculé en ajoutant à `0x1040` l'id du type device et le `vendor_id` est `0x1af4` parce que c'est un périphérique virtio (sec 4.1.2 et 5 biblio 1).
 Ici le device est `Input` avec l'id 18 (base 10) et 0x1040 + 0x12 = 0x1052.
 
-Les plus attentif d'entre vous aurons remarqués que les deux périphériques ont exactement le même `vendor_id` et `device_id` et donc il nous est pas possible (avant un bon moment) de différentier les deux périphériques. Pour des raisons de simplicité on peut remarquer que l'ordre d'affichage des devices PCI dans la console de QEMU ne change pas et correspond à l'ordre de découvert dans la mémoire.  
-On assume donc dans la suite que le premier device est le clavier et la second la souris. À vous d'adapter si l'ordre est différent cher vous.
+Les plus attentifs d'entre vous auront remarqué que les deux périphériques ont exactement le même `vendor_id` et `device_id` et donc il nous est pas possible (avant un bon moment) de différencier les deux périphériques. Pour des raisons de simplicité, on peut remarquer que l'ordre d'affichage des devices PCI dans la console de QEMU ne change pas et correspond à l'ordre de découverte dans la mémoire.
+On assume donc dans la suite que le premier device est le clavier et la second la souris. À vous d'adapter si l'ordre est différent chez vous.
 
 ## Configuration PCI
 
-D'après un article de blog de dev OS (cf biblio 3) le type de header PCI dépend du device utilisé. Ici les headers sont du type `0x0`, car info pci indique `BAR1`/`BAR4` pour nos deux pépriphériques.
+D'après un article de blog de dev OS (cf biblio 2) le type de header PCI dépend du device utilisé. Ici les headers sont du type `0x0`, car info pci indique `BAR1`/`BAR4` pour nos deux pépriphériques.
 
-Pour configurer le PCI il est fortement recommandé de mapper le header avec une struct qui à bon gout d'indiquer la structure mémoire du header.
+Pour configurer le PCI, il est fortement recommandé de mapper le header avec une struct qui à bon goût d'indiquer la structure mémoire du header.
 
-```
+```C
 typedef struct {
     /* --- Common Header (offset 0x00 – 0x0F) --- */
     uint16_t vendor_id;      // 0x00 - 0xFFFF = invalid
@@ -130,7 +131,7 @@ typedef struct {
 } __attribute__((packed, aligned(4))) pci_header_t0x0;
 ```
 
-Pour pouvoir configurer ces périphériques il faut spécifier certaines chose dans les registres PCI :
+Pour pouvoir configurer ces périphériques, il faut spécifier certaines choses dans les registres PCI :
 
 ### Registre Command
 
@@ -141,32 +142,32 @@ Pour pouvoir configurer ces périphériques il faut spécifier certaines chose d
 
 ### Registres Bases address
 
-Ce registre PCI permet d'indiquer les zones mémoire que les périphériques doivent utilisé pour leur fonctionnement.
+Ce registre PCI permet d'indiquer les zones mémoire que les périphériques doivent utiliser pour leur fonctionnement.
 
 Pour indiquer les adresses mémoires d'après les informations données par `info qtree` dans la console QEMU il faut :
 
 - placer la première valeur dans le registre `BAR1`
 - placer la seconde valeur dans le registre `BAR4`
 
-Le tout est analogue à la première configuration de la carte graphique.  
-On doit ainsi obtenir dans la console QEMU à peut près le même résultat que j'ai donné au niveau des données dans les BAR.
+Le tout est analogue à la première configuration de la carte graphique.
+On doit ainsi obtenir dans la console QEMU à peu près le même résultat que j'ai donné au niveau des données dans les BAR.
 
-J'ai choisie les adresses de manières arbitraire mais en gardant en tête que la zone mémoire requise n'est pas gargantuesque.  
-Donc aller pas mettre `BAR1` à `0x600000000` et `BAR4` à `0x700000000`, c'est inutile, soyez frugale en terme de mémoire.
+J'ai choisi les adresses de manière arbitraire mais en gardant en tête que la zone mémoire requise n'est pas gargantuesque.
+Donc, n'allez pas mettre `BAR1` à `0x600000000` et `BAR4` à `0x700000000`, c'est inutile, soyez frugale en termes de mémoire.
 
 ### Registre IRQ
 
-On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions pour les évenements des périphériques.
-Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminé à l'avance.
-Pour déterminer la valeur de l'IRQ il faut préciser le pin d'interruption, 1 pour `INTA#` (cf biblio 4) et le numéro du device PCI.
-Ainsi `IRQ = 32 + (device + pin)%4`. Pourquoi cette formule ? Après demander à une IA locale ça à l'air de fonctionner.
+On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions pour les événements des périphériques.
+Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminée à l'avance.
+Pour déterminer la valeur de l'IRQ, il faut préciser le pin d'interruption, 1 pour `INTA#` (cf biblio 3) et le numéro du device PCI.
+Ainsi `IRQ = 32 + (device + pin)%4`. Pourquoi cette formule ? Après avoir demandé à une IA locale, ça a l'air de fonctionner.
 
 ### Registre Capabilities Pointer
 
-Le `Capabilities Pointer` dans le header PCI est un pointer (dingue je sais) vers le début d'une liste chainé qui indique les espaces mémoire du device PCI.  
-Cet espace de configuration est une liste chainé de capabilities où chaque élément à la structure suivante (sec 4.1.4, biblio 1) :
+Le `Capabilities Pointer` dans le header PCI est un pointer (dingue je sais) vers le début d'une liste chainée qui indique les espaces mémoire du device PCI.
+Cet espace de configuration est une liste chaînée de capabilities où chaque élément a la structure suivante (sec 4.1.4, biblio 1) :
 
-```
+```C
 struct virtio_pci_cap {
     u8 cap_vndr;    // Generic PCI field: PCI_CAP_ID_VNDR
     u8 cap_next;    // Generic PCI field: next ptr.
@@ -180,18 +181,18 @@ struct virtio_pci_cap {
 };
 ```
 
-Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).  
+Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).
 Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.
 
-ATTENTION : on ne peut utiliser ce registre uniquement si le bit 4 du registre `Status` est à 1 (cf biblio 3).
+ATTENTION : on ne peut utiliser ce registre uniquement si le bit 4 du registre `Status` est à 1 (cf biblio 2).
 
-## VIRTIO
+## VIRTIO - Configuration générale
 
 ### Initilisation
 
 #### Adresse de configuration
 
-Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 1).  
+Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 1).
 Pour ce faire nous devons accéder à l'adresse de configuration du périphérique et nous allons utiliser les renseignements données par le `Capabilities Pointer`.
 En effet, il suffit de :
 
@@ -202,35 +203,35 @@ En effet, il suffit de :
 
 Un fois configurer nous allons nous servir de la structure suivante pour accéder au paramètre et initiliser l'audio (sec 4.1.4.3, biblio 1) :
 
-```
+```C
 struct virtio_pci_common_cfg {
     /* About the whole device. */
-    le32 device_feature_select; /* read-write */
-    le32 device_feature;        /* read-only for driver */
-    le32 driver_feature_select; /* read-write */
-    le32 driver_feature;        /* read-write */
-    le16 config_msix_vector;    /* read-write */
-    le16 num_queues;            /* read-only for driver */
-    u8 device_status;           /* read-write */
-    u8 config_generation;       /* read-only for driver */
+    le32 device_feature_select; // read-write
+    le32 device_feature;        // read-only for driver
+    le32 driver_feature_select; // read-write
+    le32 driver_feature;        // read-write
+    le16 config_msix_vector;    // read-write
+    le16 num_queues;            // read-only for driver
+    u8 device_status;           // read-write
+    u8 config_generation;       // read-only for driver
 
     /* About a specific virtqueue. */
-    le16 queue_select;          /* read-write */
-    le16 queue_size;            /* read-write */
-    le16 queue_msix_vector;     /* read-write */
-    le16 queue_enable;          /* read-write */
-    le16 queue_notify_off;      /* read-only for driver */
-    le64 queue_desc;            /* read-write */
-    le64 queue_driver;          /* read-write */
-    le64 queue_device;          /* read-write */
-    le16 queue_notify_data;     /* read-only for driver */
-    le16 queue_reset;           /* read-write */
+    le16 queue_select;          // read-write
+    le16 queue_size;            // read-write
+    le16 queue_msix_vector;     // read-write
+    le16 queue_enable;          // read-write
+    le16 queue_notify_off;      // read-only for driver
+    le64 queue_desc;            // read-write
+    le64 queue_driver;          // read-write
+    le64 queue_device;          // read-write
+    le16 queue_notify_data;     // read-only for driver
+    le16 queue_reset;           // read-write
 };
 ```
 
 Valeur utile pour la suite :
 
-```
+```C
 #define VIRTIO_STATUS_ACKNOWLEDGE 1
 #define VIRTIO_STATUS_DRIVER 2
 #define VIRTIO_STATUS_DRIVER_OK 4
@@ -251,18 +252,68 @@ L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étap
 
 Chaque étape demande ça propre partie.
 
-## Etape 1 : Reset
+### Etape 1 : Reset
+
+Pour réinitialiser le périphérique nous devons mettre à `0` le registre `device_status` et vérifier que celui-ci soit bien à `0`.
+Ainsi on reset de périphérique et le périphérique est bien réinitialiser (spec 2.4 biblio 1).
+
+### Etape 2~3 : ACKNOWLEDGE et DRIVER
+
+Avant d'utiliser d'aller plus loin dans la configuration du périphérique nous devons :
+
+- Signaler au périphérique que l'OS l'a reconnus
+  => bit `ACKNOWLEDGE` de `device_status` à 1.
+- Signlaer au périphérique que l'OS sait comment utiliser le périphérique
+  => bit `DRIVER` de `device_status` à 1
+
+### Etape 4 : Feature bits
+
+Ici dans le cas spécifique des Input device les bits de features sont sont pas utilisé. Je renvoi donc le lecteur vers la documentation Virtio pour plus de détails. (spec 3.1.1 biblio 1).
+
+## Etape 5 : FEATURE_OK
+
+Après avoir séléctionné les bits de features voulue, on doit dire au périphérique qu'on a fini.  
+On doit donc mettre le bit `VIRTIO_STATUS_FEATURES_OK` du registre `device_status` à 1.
+ATTENTION : Après cela il ne faut pas essayer de séléctionner de nouveaux bits de features.
+
+### Etape 6 : Vérifier FEATURE_OK
+
+Il est possible que les features demandées par le driver (nous) ne soient pas supportées par le périphérique.  
+Ainsi il faut vérifier que le bit `VIRTIO_STATUS_FEATURES_OK` dans le registre `device_status` reste bien à 1 sinon le périphérique refuse notre demande de features.
+
+### Etape 7 : Configuration spécifique du périphérique
+
+Maintenant nous devons configurer le périphérique pour qu'il puisse communiquer avec nous.
+Nous allons donc devoir mettre en place les Virtqueues (partie d'après).
+
+### Etape 8 : Activation du périphérique
+
+Une fois la configuration terminer on doit activer le périphérique.  
+Il faut pour ça mettre le bit `VIRTIO_STATUS_DRIVER_OK` du registre `device_status` à 1.
+
+## VIRTIO - Configuration Virtqueue
+
+Pour pouvoir communiquer avec les périphériques virtio nous devons utiliser des virtqueue.  
+Le mécanisme de transport de données sur les périphériques virtio porte le nom pompeux de « virtqueue ». Chaque périphérique peut
+disposer d'une ou plusieurs virtqueues. Dans notre cas de périphérique input il n'y a que 2 queue : `eventq` et `statusq`.
+Nous allons ici uniquement utiliser `eventq`.
+Le pilote met les requêtes à la disposition du périphérique en ajoutant un tampon disponible à la file d'attente, c'est-à-dire en ajoutant un tampon décrivant la requête à une virtqueue, et en déclenchant éventuellement un événement de driver, c'est-à-dire en envoyant une notification de tampon disponible au périphérique.
+
+Le périphérique traite les requêtes et, une fois celles-ci terminées, ajoute un tampon utilisé à la file d'attente, c'est-à-dire qu'il en informe le pilote en marquant le tampon comme utilisé. Le périphérique peut alors déclencher un événement de périphérique, c'est-à-dire envoyer une notification de tampon utilisé au pilote.
+
+Chaque virtqueue comporte trois parties :
+
+- Descriptor Area : sert à décrire les tampons
+- Driver Area : données supplémentaires fournies par le pilote au périphérique
+- Device Area : données supplémentaires fournies par le périphérique au pilote
 
 ## Biblio
 
 Documentation générale des virtio :
-1: https://docs.oasis-open.org/virtio/virtio/v1.2/csd01/virtio-v1.2-csd01.pdf
+1: [Documentation Virtio v1.2](https://docs.oasis-open.org/virtio/virtio/v1.2/csd01/virtio-v1.2-csd01.pdf)
 
-Configuration de QEMU :
-2: https://www.qemu.org/docs/master/system/devices/virtio/virtio-snd.html
-
-Pour la configue PCI :
-3: https://wiki.osdev.org/PCI
+Pour la configuration PCI :
+2: [Configuration PCI](https://wiki.osdev.org/PCI)
 
 Plus d'info sur les interruptions :
-4: https://tldp.org/HOWTO/Plug-and-Play-HOWTO-7.html
+4: [Interruptions](https://tldp.org/HOWTO/Plug-and-Play-HOWTO-7.html)
