@@ -1,5 +1,7 @@
 # Documentation périphériques inputs
 
+Par Vincent Verdillon
+
 ## Conventions Oasis
 
 ### Types
@@ -293,19 +295,226 @@ Il faut pour ça mettre le bit `VIRTIO_STATUS_DRIVER_OK` du registre `device_sta
 
 ## VIRTIO - Configuration Virtqueue
 
-Pour pouvoir communiquer avec les périphériques virtio nous devons utiliser des virtqueue.  
-Le mécanisme de transport de données sur les périphériques virtio porte le nom pompeux de « virtqueue ». Chaque périphérique peut
-disposer d'une ou plusieurs virtqueues. Dans notre cas de périphérique input il n'y a que 2 queue : `eventq` et `statusq`.
-Nous allons ici uniquement utiliser `eventq`.
-Le pilote met les requêtes à la disposition du périphérique en ajoutant un tampon disponible à la file d'attente, c'est-à-dire en ajoutant un tampon décrivant la requête à une virtqueue, et en déclenchant éventuellement un événement de driver, c'est-à-dire en envoyant une notification de tampon disponible au périphérique.
+Je recommande de créer une structure pour stocker toutes les informations utile à propos d'un device virtio :
 
-Le périphérique traite les requêtes et, une fois celles-ci terminées, ajoute un tampon utilisé à la file d'attente, c'est-à-dire qu'il en informe le pilote en marquant le tampon comme utilisé. Le périphérique peut alors déclencher un événement de périphérique, c'est-à-dire envoyer une notification de tampon utilisé au pilote.
+```C
+/* Inputs virtio device structure, include virtio_device */
+typedef struct {
+    cfg_virtio_device cfg_mem_map;             // cfg memory map
+    virtq queue0;                              // input virtqueue
+    virtio_input_event event_pool[QUEUE_SIZE]; // event pool
+    uint16_t last_used_idx;
+    uint32_t notify_off; // Multiplier from PCI notify capability (used to
+                         // compute notify address)
+    void (*handle_event)(virtio_input_event *event);
+} input_virtio_device;
+```
+
+Pour pouvoir communiquer avec les périphériques virtio nous devons utiliser des virtqueue.  
+Le mécanisme de transport de données sur les périphériques virtio porte le nom pompeux de « virtqueue ».
+Chaque périphérique peut disposer d'une ou plusieurs virtqueues. Dans notre cas de périphérique input il n'y a que 2 queue : `eventq` et `statusq`.
+Nous allons ici uniquement utiliser `eventq`.
+Le pilote met les requêtes à la disposition du périphérique en ajoutant un buffer disponible à la file d'attente, c'est-à-dire en ajoutant un buffer décrivant la requête à une virtqueue, et en déclenchant éventuellement un événement de driver, c'est-à-dire en envoyant une notification de tampon disponible au périphérique.
+
+Le périphérique traite les requêtes et, une fois celles-ci terminées, ajoute un buffer utilisé à la file d'attente, c'est-à-dire qu'il en informe le pilote en marquant le tampon comme utilisé. Le périphérique peut alors déclencher un événement de périphérique, c'est-à-dire envoyer une notification de tampon utilisé au pilote.
 
 Chaque virtqueue comporte trois parties :
 
-- Descriptor Area : sert à décrire les tampons
+- Descriptor Area : sert à décrire les buffers
 - Driver Area : données supplémentaires fournies par le pilote au périphérique
 - Device Area : données supplémentaires fournies par le périphérique au pilote
+
+Dans la suite nous allons supposer utiliser des `Split Virtqueue` (spec 2.7 bibli 1), au lieu de `Packed Virtqueue`. Les deux modes de fonctionnement sont tous les deux supportés et j'ai choisie d'utiliser le plus ancien.
+
+### Virtqueue Descriptor
+
+```C
+/* This marks a buffer as continuing via the next field. */
+#define VIRTQ_DESC_F_NEXT 1
+/* This marks a buffer as device write-only (otherwise device read-only). */
+#define VIRTQ_DESC_F_WRITE 2
+/* This means the buffer contains a list of buffer descriptors. */
+#define VIRTQ_DESC_F_INDIRECT 4
+
+/* Virtqueue descriptors: 16 bytes.
+ * These can chain together via "next". */
+typedef struct {
+    uint64_t addr;  // Address (guest-physical).
+    uint32_t len;   // Length
+    uint16_t flags; // The flags as indicated above.
+    uint16_t next;  // Next field if flags & NEXT
+} __attribute__((packed, aligned(4))) virtq_desc;
+```
+
+La table descriptor est la partie buffer du driver pour le périphérique. L'adresse `addr` réfère à un emplacement mémoire qui permet de stocker les messages envoyé et reçu par le périphérique et le driver, ici une case de `event_pool`.  
+Ici nous voulons que le périphérique nous envoie des messages donc il aut mettre `flags` à `VIRTQ_DESC_F_WRITE`.  
+Nous n'allons chainer la liste donc on ne touchera pas à `next`.
+
+### Virtqueue Available Ring
+
+```C
+/* The device writes available ring entries with buffer head indexes. */
+typedef struct {
+    uint16_t flags;
+    uint16_t idx; // ATOMIC INSTRUCT
+    uint16_t ring[QUEUE_SIZE];
+    uint16_t used_event; // Only if VIRTIO_F_EVENT_IDX
+} __attribute__((packed, aligned(4))) virtq_avail;
+```
+
+Le driver utilise l'available ring pour proposer des buffers au périphérique : chaque entrée de la liste correspond à la tête d'une chaîne de descripteurs. Elle est uniquement écrite par le pilote et lue par le périphérique.  
+Le champ idx indique l'emplacement où le driver placerait la prochaine entrée de la chaîne dans la liste (modulo la taille de la file d'attente).
+Il commence à 0 et augmente progressivement.
+
+A noter que l'écriture de `idx` doit être "atomique". C'est à dire que les instructions d'écriture doivent être faite une et une seul fois par le processeur pour éviter que deux processus ou coeur n'écrivent en même temps ce champs. Dans notre cas particulier ce ne pose pas de problème car nous n'avons qu'un coeur. Mais pour faire les choses corrctement il faut utiliser ça avant l'instruction d'écriture d'`idx`:
+
+```C
+__asm__ __volatile__("fence" ::: "memory");
+```
+
+### Virtqueues used
+
+```C
+/* uint32_t is used here for ids for padding reasons. */
+typedef struct {
+    uint32_t id; // Index of start of used descriptor chain.
+    /*
+     * The number of bytes written into the device writable portion of
+     * the buffer described by the descriptor chain.
+     */
+    uint32_t len;
+} __attribute__((packed, aligned(4))) virtq_used_elem;
+
+/* The device writes used elements into this ring. */
+typedef struct {
+    uint16_t flags;
+    uint16_t idx; // ATOMIC INSTRUCT
+    virtq_used_elem ring[QUEUE_SIZE];
+    uint16_t avail_event; // Only if VIRTIO_F_EVENT_IDX
+} __attribute__((packed, aligned(4))) virtq_used;
+```
+
+La file d'attente « used » est l'endroit où le périphérique renvoie les buffers une fois qu'il en a fini avec eux : elle est uniquement écrite par le périphérique et lue par le driver.
+Chaque entrée de la file d'attente est un couple : « id » indique l'entrée de tête de la chaîne de descripteurs décrivant le buffer (celle-ci correspond à une entrée placée précédemment dans la file d'attente « available » par l'invité), et « len » le nombre total d'octets écrits dans le buffer.
+
+## Implementation
+
+Dans cette section nous allons voir comment utiliser les périphériques virtio inputs.
+
+### Mémoire
+
+Nous devons stocker les informations générales à propos de ces périphériques donc il faut définir les structures précédemment, plus les emplacements mémoires dédiés :
+
+```C
+``/* Virtio */
+extern volatile input_virtio_device virtio_device_inputs[2];
+extern volatile uint8_t virtio_input_irqs[2];
+
+/* mouse buttons */
+extern volatile uint8_t lb_status; // left mouse button status
+extern volatile uint8_t rb_status; // right mouse button status
+extern volatile uint8_t mb_status; // middle mouse button status
+
+/* mouse position */
+extern volatile int32_t mouse_x;
+extern volatile int32_t mouse_y;
+```
+
+Les champs pour les souris seront utilisé un peu plus tard.
+
+### Configuration initiale
+
+On reprend le code principale à l'étape 7 et 8 en rajoutant la configuration de la virtqueue.
+
+Il faut configurer la virtqueue 0, `eventq`, on l'a séléctionne et spécifie ça taille (128 éléments arbitrairement ici) :
+
+```C
+cfg->queue_select = 0;
+cfg->queue_size = (uint16_t)QUEUE_SIZE;
+```
+
+On spécifie les adresse des trois éléments de la virtqueue dans la mémoire dédiés du périphérique :
+
+```C
+cfg->queue_desc = (uint64_t)&virtio_device_inputs[i].queue0.descriptors;
+cfg->queue_driver = (uint64_t)&virtio_device_inputs[i].queue0.available_ring;
+cfg->queue_device = (uint64_t)&virtio_device_inputs[i].queue0.used_ring;
+```
+
+Puis on les initialise eux aussi :
+
+```C
+/* initial filling of the queue */
+for (uint16_t j = 0; j < QUEUE_SIZE; j++) {
+    virtio_device_inputs[i].queue0.descriptors[j].addr = (uint64_t)&virtio_device_inputs[i].event_pool[j];
+    virtio_device_inputs[i].queue0.descriptors[j].len = sizeof(virtio_input_event);
+    virtio_device_inputs[i].queue0.descriptors[j].flags = VIRTQ_DESC_F_WRITE;
+    virtio_device_inputs[i].queue0.available_ring.ring[j] = j;
+}
+```
+
+Comme nous travaillons avec des buffer "circulaire" il faut aussi initialiser l'index précédemment utilisé et le suivant. Modulo évidemment la taille du buffer.
+
+```C
+__asm__ __volatile__("fence" ::: "memory");
+
+/* initialisation des index */
+virtio_device_inputs[i].last_used_idx = 0;
+virtio_device_inputs[i].queue0.available_ring.idx = QUEUE_SIZE;
+```
+
+La gestion des interruptions ce fera via le PLIC donc inutile il n'y a pas de champs interruptions. Cependant, par la suite il faudra créer des fonctions pour traiter ces interruptions, il est donc nécessaire des les spécifier :
+
+```C
+/* specifie event handler for each device */
+if (i == 0) {
+    virtio_device_inputs[i].handle_event = handle_keyboard_event;
+} else {
+    virtio_device_inputs[i].handle_event = handle_mouse_event;
+}
+```
+
+A partir de maintenant la virtqueue est opérationnel, il ne reste plus qu'a l'activer et activer le périphérique pour conclure cette partie :
+
+```C
+cfg->queue_enable = 1;
+
+/* --- Étape 8 : DRIVER_OK → le device est prêt --- */
+cfg->device_status |= VIRTIO_STATUS_DRIVER_OK;
+```
+
+BRAVO ! Vous venez d'initiliser la virtqueue. Mais maintenant il faut la lancer elle aussi en envoyant une notification.
+
+### Virtqueue First Kick
+
+Pour démarrer la virtqueue il suffit d'écrire dans l'espace de notification du périphérique.  
+Espace qui ce trouve à un addresse qu'il faut calculer comme ci-dessous :
+
+```C
+/* Premier kick: notifier la queue via la notify BAR */
+volatile input_virtio_device *dev = &virtio_device_inputs[i];
+uint64_t notify_base = dev->cfg_mem_map.notify_cfg;
+uint64_t notify_addr = notify_base + ((uint64_t)cfg->queue_notify_off * (uint64_t)dev->notify_off);
+```
+
+Pour le forme on met à jour le dernier `idx` :
+
+```
+__asm__ __volatile__("fence" ::: "memory");
+volatile virtq_used *used = &dev->queue0.used_ring;
+uint16_t used_before = used->idx;
+```
+
+Si l'adresse calculer est bonne on notifie le périphérique qu'on est ok pour continuer :
+
+```
+/* Write notify (kick) */
+if (notify_addr != 0) {
+    *((volatile uint16_t *)notify_addr) = 0; // 0 = index de la queue
+}
+```
+
+A partir de maintenant on va recevoir des interruptions depuis le PLIC qu'il va falloir gérer. Les parties suivantes vont traiter ces points.
 
 ## Biblio
 
@@ -317,3 +526,7 @@ Pour la configuration PCI :
 
 Plus d'info sur les interruptions :
 4: [Interruptions](https://tldp.org/HOWTO/Plug-and-Play-HOWTO-7.html)
+
+```
+
+```
