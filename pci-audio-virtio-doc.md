@@ -94,69 +94,102 @@ Ici le device est `Sound device` avec l'id 25 (base 10) et 0x1040 + 0x19 = 0x105
 
 ## Configuration PCI
 
-D'après un article de blog de dev OS (cf 3) le type de header PCI dépend du device utilisé. Ici pour le device son le header est du type `0x0`, car info pci indique `BAR1`/`BAR4`.
+D'après un article de blog de dev OS (cf biblio 2) le type de header PCI dépend du device utilisé. Ici les headers sont du type `0x0`, car info pci indique `BAR1`/`BAR4` pour nos deux pépriphériques.
 
-Pour pouvoir configurer ce périiphérique il faut spécifier certaines chose :
+Pour configurer le PCI, il est fortement recommandé de mapper le header avec une struct qui à bon goût d'indiquer la structure mémoire du header.
 
-### Command
+```C
+typedef struct {
+    /* --- Common Header (offset 0x00 – 0x0F) --- */
+    uint16_t vendor_id;      // 0x00 - 0xFFFF = invalid
+    uint16_t device_id;      // 0x02
+    uint16_t command;        // 0x04
+    uint16_t status;         // 0x06
+    uint8_t revision_id;     // 0x08
+    uint8_t prog_if;         // 0x09 - Programming Interface
+    uint8_t subclass;        // 0x0A
+    uint8_t class_code;      // 0x0B
+    uint8_t cache_line_size; // 0x0C - en unités de 32 bits
+    uint8_t latency_timer;   // 0x0D
+    uint8_t header_type;     // 0x0E - bit 7 = multi-function
+    uint8_t bist;            // 0x0F - Built-In Self Test
+
+    /* --- Type 0x0 Specific (offset 0x10 – 0x3F) --- */
+    uint32_t bar[6]; // 0x10–0x27 - Base Address Registers
+
+    uint32_t cardbus_cis_ptr;     // 0x28 - CardBus CIS Pointer
+    uint16_t subsystem_vendor_id; // 0x2C
+    uint16_t subsystem_id;        // 0x2E
+
+    uint32_t expansion_rom_base; // 0x30
+
+    uint8_t capabilities_ptr; // 0x34 - offset dans le config space
+    uint8_t reserved0[3];     // 0x35–0x37
+    uint32_t reserved1;       // 0x38
+
+    uint8_t interrupt_line; // 0x3C - IRQ mappé par le BIOS/OS
+    uint8_t interrupt_pin;  // 0x3D - 0x00 = pas d'IRQ, 0x01=INTA...
+    uint8_t min_grant;      // 0x3E - burst period désiré (en 250ns)
+    uint8_t max_latency;    // 0x3F - fréquence d'accès au bus voulue
+} __attribute__((packed, aligned(4))) pci_header_t0x0;
+```
+
+Pour pouvoir configurer ces périphériques, il faut spécifier certaines choses dans les registres PCI :
+
+### Registre Command
 
 - les autorisations dans le registres `command`, ici 0b111 => bit 0 = 1 : autoriser les entrées sorties, bit 1 = 1 : autorise l'accès de notre part à la mémoire,
   bit 2 = 1 : autorise l'accès du device à la mémoire qui lui est attribué.
 - l'adresse mémoire pour la configuration avec registres, `BAR1` car non-prefetchable.
-- l'adresse mémoire pour l'utilisation, `BAR2` car prefetchable.
+- l'adresse mémoire pour l'utilisation, `BAR4` car prefetchable.
 
-### Bases address
+### Registres Bases address
+
+Ce registre PCI permet d'indiquer les zones mémoire que les périphériques doivent utiliser pour leur fonctionnement.
 
 Pour indiquer les adresses mémoires d'après les informations données par `info qtree` dans la console QEMU il faut :
 
-- placer la première valeur `BAR1` à l'adresse `PCI_AUDIO + 0x14`
-- placer la seconde valeur `BAR4` à l'adresse `PCI_ADUIO + 0x20`
+- placer la première valeur dans le registre `BAR1`
+- placer la seconde valeur dans le registre `BAR4`
 
-Le tout est analogue à la première configuration de la carte graphique et doit impérativement respecter l'alignement de 4 octet de la zone de spécification.
-On doit ainsi obtenir dans la console QEMU :
+Le tout est analogue à la première configuration de la carte graphique.
+On doit ainsi obtenir dans la console QEMU à peu près le même résultat que j'ai donné au niveau des données dans les BAR.
 
-```
-class Audio controller, addr 00:02.0, pci id 1af4:1059 (sub 1af4:1100)
-bar 1: mem at 0x60000000 [0x60000fff]
-bar 4: mem at 0x61000000 [0x61003fff]
-bus: virtio-bus
-type virtio-pci-bus
-```
+J'ai choisi les adresses de manière arbitraire mais en gardant en tête que la zone mémoire requise n'est pas gargantuesque.
+Donc, n'allez pas mettre `BAR1` à `0x600000000` et `BAR4` à `0x700000000`, c'est inutile, soyez frugale en termes de mémoire. Vous pouvez voir avec `info pci` l'adresse de fin qui est utilisée pour calculer la taille de la adresse nécessaire.
 
-J'ai choisie les adresses de manières arbitraire mais en gardant en tête que la partie configuration aura besoin généralement de moins de mémoire.
+### Registre IRQ
 
-### IRQ
+On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions pour les événements des périphériques.
+Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminée à l'avance.
+Pour déterminer la valeur de l'IRQ, il faut préciser le pin d'interruption, 1 pour `INTA#` (cf biblio 3) et le numéro du device PCI.
+Ainsi `IRQ = 32 + (device + pin)%4`. Pourquoi cette formule ? Après avoir demandé à une IA locale, ça a l'air de fonctionner.
 
-On doit aussi configurer l'IRQ pour pouvoir obtenir des interruptions propre par la suite.
-Ainsi on doit modifier le registre `Interrupt Line` par une valeur prédéterminé à l'avance.
-Pour déterminer la valeur de l'IRQ il faut préciser le pin d'interruption, 1 pour `INTA#` et le numéro du device PCI.
-Ainsi `IRQ = 32 + (device + pin)%4`
+### Registre Capabilities Pointer
 
-### Capabilities Pointer
+Le `Capabilities Pointer` dans le header PCI est un pointer (dingue je sais) vers le début d'une liste chainée qui indique les espaces mémoire du device PCI.
+Cet espace de configuration est une liste chaînée de capabilities où chaque élément a la structure suivante (sec 4.1.4, biblio 1) :
 
-Le `Capabilities Pointer` situé à un offset de `0x34` dans le header PCI est un pointer vers l'espace de configuration du device PCI.  
-Cet espace de configuration est une liste de capabilities où chaque élément à la structure suivante (sec 4.1.4, biblio 1) :
-
-```
+```C
 struct virtio_pci_cap {
-    u8 cap_vndr;    /* Generic PCI field: PCI_CAP_ID_VNDR */
-    u8 cap_next;    /* Generic PCI field: next ptr. */
-    u8 cap_len;     /* Generic PCI field: capability length */
-    u8 cfg_type;    /* Identifies the structure. */
-    u8 bar;         /* Where to find it. */
-    u8 id;          /* Multiple capabilities of the same type */
-    u8 padding[2];  /* Pad to full dword. */
-    le32 offset;    /* Offset within bar. */
-    le32 length;    /* Length of the structure, in bytes. */
+    u8 cap_vndr;    // Generic PCI field: PCI_CAP_ID_VNDR
+    u8 cap_next;    // Generic PCI field: next ptr.
+    u8 cap_len;     // Generic PCI field: capability length
+    u8 cfg_type;    // Identifies the structure.
+    u8 bar;         // Where to find it.
+    u8 id;          // Multiple capabilities of the same type
+    u8 padding[2];  // Pad to full dword.
+    le32 offset;    // Offset within bar.
+    le32 length;    // Length of the structure, in bytes.
 };
 ```
 
-Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).  
+Dans la suite nous allons devoir trouver l'élément de la liste dont `cap_vndr` est `0x09` (sec 4.1.4, biblio 1).
 Ainsi nous pourrons accéder à l'espace de configuration du device qui se trouve dans l'espace mémoire `bar` + `offset`.
 
-ATTENTION : on ne peut l'utiliser que si le bit 4 du registre `Status` est à 1.
+ATTENTION : on ne peut utiliser ce registre uniquement si le bit 4 du registre `Status` est à 1 (cf biblio 2).
 
-## VIRTIO
+## VIRTIO - Configuration générale
 
 ### Initilisation
 
@@ -173,7 +206,7 @@ En effet, il suffit de :
 
 Un fois configurer nous allons nous servir de la structure suivante pour accéder au paramètre et initiliser l'audio (sec 4.1.4.3, biblio 1) :
 
-```
+```C
 struct virtio_pci_common_cfg {
     /* About the whole device. */
     le32 device_feature_select; /* read-write */
@@ -201,7 +234,7 @@ struct virtio_pci_common_cfg {
 
 Valeur utile pour la suite :
 
-```
+```C
 #define VIRTIO_STATUS_ACKNOWLEDGE 1
 #define VIRTIO_STATUS_DRIVER 2
 #define VIRTIO_STATUS_DRIVER_OK 4
@@ -222,7 +255,148 @@ L'initilisation consiste à "prévenir" le device qu'on va l'utliser, en 8 étap
 
 Chaque étape demande ça propre partie.
 
-## Etape 1 : Reset
+### Etape 1 : Reset
+
+Pour réinitialiser le périphérique nous devons mettre à `0` le registre `device_status` et vérifier que celui-ci soit bien à `0`.
+Ainsi on reset de périphérique et le périphérique est bien réinitialiser (spec 2.4 biblio 1).
+
+### Etape 2~3 : ACKNOWLEDGE et DRIVER
+
+Avant d'utiliser d'aller plus loin dans la configuration du périphérique nous devons :
+
+- Signaler au périphérique que l'OS l'a reconnus
+  => bit `ACKNOWLEDGE` de `device_status` à 1.
+- Signlaer au périphérique que l'OS sait comment utiliser le périphérique
+  => bit `DRIVER` de `device_status` à 1
+
+### Etape 4 : Feature bits
+
+Ici dans le cas spécifique des Input device les bits de features sont sont pas utilisé. Je renvoi donc le lecteur vers la documentation Virtio pour plus de détails. (spec 3.1.1 biblio 1).
+
+### Etape 5 : FEATURE_OK
+
+Après avoir séléctionné les bits de features voulue, on doit dire au périphérique qu'on a fini.  
+On doit donc mettre le bit `VIRTIO_STATUS_FEATURES_OK` du registre `device_status` à 1.
+ATTENTION : Après cela il ne faut pas essayer de séléctionner de nouveaux bits de features.
+
+### Etape 6 : Vérifier FEATURE_OK
+
+Il est possible que les features demandées par le driver (nous) ne soient pas supportées par le périphérique.  
+Ainsi il faut vérifier que le bit `VIRTIO_STATUS_FEATURES_OK` dans le registre `device_status` reste bien à 1 sinon le périphérique refuse notre demande de features.
+
+### Etape 7 : Configuration spécifique du périphérique
+
+Maintenant nous devons configurer le périphérique pour qu'il puisse communiquer avec nous.
+Nous allons donc devoir mettre en place les Virtqueues (partie d'après).
+
+### Etape 8 : Activation du périphérique
+
+Une fois la configuration terminer on doit activer le périphérique.  
+Il faut pour ça mettre le bit `VIRTIO_STATUS_DRIVER_OK` du registre `device_status` à 1.
+
+## VIRTIO - Configuration Virtqueue
+
+Je recommande de créer une structure pour stocker toutes les informations utile à propos d'un device virtio :
+
+```C
+/* Inputs virtio device structure, include virtio_device */
+typedef struct {
+    cfg_virtio_device cfg_mem_map;             // cfg memory map
+    virtq queue0;                              // input virtqueue
+    virtio_input_event event_pool[QUEUE_SIZE]; // event pool
+    uint16_t last_used_idx;
+    uint32_t notify_off; // Multiplier from PCI notify capability (used to
+                         // compute notify address)
+    void (*handle_event)(virtio_input_event *event);
+} input_virtio_device;
+```
+
+Pour pouvoir communiquer avec les périphériques virtio nous devons utiliser des virtqueue.  
+Le mécanisme de transport de données sur les périphériques virtio porte le nom pompeux de « virtqueue ».
+Chaque périphérique peut disposer d'une ou plusieurs virtqueues. Dans notre cas de périphérique input il n'y a que 2 queue : `eventq` et `statusq`.
+Nous allons ici uniquement utiliser `eventq`.
+Le pilote met les requêtes à la disposition du périphérique en ajoutant un buffer disponible à la file d'attente, c'est-à-dire en ajoutant un buffer décrivant la requête à une virtqueue, et en déclenchant éventuellement un événement de driver, c'est-à-dire en envoyant une notification de tampon disponible au périphérique.
+
+Le périphérique traite les requêtes et, une fois celles-ci terminées, ajoute un buffer utilisé à la file d'attente, c'est-à-dire qu'il en informe le pilote en marquant le tampon comme utilisé. Le périphérique peut alors déclencher un événement de périphérique, c'est-à-dire envoyer une notification de tampon utilisé au pilote.
+
+Chaque virtqueue comporte trois parties :
+
+- Descriptor Area : sert à décrire les buffers
+- Driver Area : données supplémentaires fournies par le pilote au périphérique
+- Device Area : données supplémentaires fournies par le périphérique au pilote
+
+Dans la suite nous allons supposer utiliser des `Split Virtqueue` (spec 2.7 bibli 1), au lieu de `Packed Virtqueue`. Les deux modes de fonctionnement sont tous les deux supportés et j'ai choisie d'utiliser le plus ancien.
+
+### Virtqueue Descriptor
+
+```C
+/* This marks a buffer as continuing via the next field. */
+#define VIRTQ_DESC_F_NEXT 1
+/* This marks a buffer as device write-only (otherwise device read-only). */
+#define VIRTQ_DESC_F_WRITE 2
+/* This means the buffer contains a list of buffer descriptors. */
+#define VIRTQ_DESC_F_INDIRECT 4
+
+/* Virtqueue descriptors: 16 bytes.
+ * These can chain together via "next". */
+typedef struct {
+    uint64_t addr;  // Address (guest-physical).
+    uint32_t len;   // Length
+    uint16_t flags; // The flags as indicated above.
+    uint16_t next;  // Next field if flags & NEXT
+} __attribute__((packed, aligned(4))) virtq_desc;
+```
+
+La table descriptor est la partie buffer du driver pour le périphérique. L'adresse `addr` réfère à un emplacement mémoire qui permet de stocker les messages envoyé et reçu par le périphérique et le driver, ici une case de `event_pool`.  
+Ici nous voulons que le périphérique nous envoie des messages donc il aut mettre `flags` à `VIRTQ_DESC_F_WRITE`.  
+Nous n'allons chainer la liste donc on ne touchera pas à `next`.
+
+### Virtqueue Available Ring
+
+```C
+/* The device writes available ring entries with buffer head indexes. */
+typedef struct {
+    uint16_t flags;
+    uint16_t idx; // ATOMIC INSTRUCT
+    uint16_t ring[QUEUE_SIZE];
+    uint16_t used_event; // Only if VIRTIO_F_EVENT_IDX
+} __attribute__((packed, aligned(4))) virtq_avail;
+```
+
+Le driver utilise l'available ring pour proposer des buffers au périphérique : chaque entrée de la liste correspond à la tête d'une chaîne de descripteurs. Elle est uniquement écrite par le pilote et lue par le périphérique.  
+Le champ idx indique l'emplacement où le driver placerait la prochaine entrée de la chaîne dans la liste (modulo la taille de la file d'attente).
+Il commence à 0 et augmente progressivement.
+
+A noter que l'écriture de `idx` doit être "atomique". C'est à dire que les instructions d'écriture doivent être faite une et une seul fois par le processeur pour éviter que deux processus ou coeur n'écrivent en même temps ce champs. Dans notre cas particulier ce ne pose pas de problème car nous n'avons qu'un coeur. Mais pour faire les choses corrctement il faut utiliser ça avant l'instruction d'écriture d'`idx`:
+
+```C
+__asm__ __volatile__("fence" ::: "memory");
+```
+
+### Virtqueues used
+
+```C
+/* uint32_t is used here for ids for padding reasons. */
+typedef struct {
+    uint32_t id; // Index of start of used descriptor chain.
+    /*
+     * The number of bytes written into the device writable portion of
+     * the buffer described by the descriptor chain.
+     */
+    uint32_t len;
+} __attribute__((packed, aligned(4))) virtq_used_elem;
+
+/* The device writes used elements into this ring. */
+typedef struct {
+    uint16_t flags;
+    uint16_t idx; // ATOMIC INSTRUCT
+    virtq_used_elem ring[QUEUE_SIZE];
+    uint16_t avail_event; // Only if VIRTIO_F_EVENT_IDX
+} __attribute__((packed, aligned(4))) virtq_used;
+```
+
+La file d'attente « used » est l'endroit où le périphérique renvoie les buffers une fois qu'il en a fini avec eux : elle est uniquement écrite par le périphérique et lue par le driver.
+Chaque entrée de la file d'attente est un couple : « id » indique l'entrée de tête de la chaîne de descripteurs décrivant le buffer (celle-ci correspond à une entrée placée précédemment dans la file d'attente « available » par l'invité), et « len » le nombre total d'octets écrits dans le buffer.
 
 ## Biblio
 

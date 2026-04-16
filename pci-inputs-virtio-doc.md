@@ -140,7 +140,7 @@ Pour pouvoir configurer ces périphériques, il faut spécifier certaines choses
 - les autorisations dans le registres `command`, ici 0b111 => bit 0 = 1 : autoriser les entrées sorties, bit 1 = 1 : autorise l'accès de notre part à la mémoire,
   bit 2 = 1 : autorise l'accès du device à la mémoire qui lui est attribué.
 - l'adresse mémoire pour la configuration avec registres, `BAR1` car non-prefetchable.
-- l'adresse mémoire pour l'utilisation, `BAR2` car prefetchable.
+- l'adresse mémoire pour l'utilisation, `BAR4` car prefetchable.
 
 ### Registres Bases address
 
@@ -155,7 +155,7 @@ Le tout est analogue à la première configuration de la carte graphique.
 On doit ainsi obtenir dans la console QEMU à peu près le même résultat que j'ai donné au niveau des données dans les BAR.
 
 J'ai choisi les adresses de manière arbitraire mais en gardant en tête que la zone mémoire requise n'est pas gargantuesque.
-Donc, n'allez pas mettre `BAR1` à `0x600000000` et `BAR4` à `0x700000000`, c'est inutile, soyez frugale en termes de mémoire.
+Donc, n'allez pas mettre `BAR1` à `0x600000000` et `BAR4` à `0x700000000`, c'est inutile, soyez frugale en termes de mémoire. Vous pouvez voir avec `info pci` l'adresse de fin qui est utilisée pour calculer la taille de la adresse nécessaire.
 
 ### Registre IRQ
 
@@ -192,7 +192,7 @@ ATTENTION : on ne peut utiliser ce registre uniquement si le bit 4 du registre `
 
 ### Initilisation
 
-#### Adresse de configuration
+### Adresse de configuration
 
 Pour pouvoir utiliser un périphérique Virtio nous devons premièrement l'initiliser (sec 3.1 biblio 1).
 Pour ce faire nous devons accéder à l'adresse de configuration du périphérique et nous allons utiliser les renseignements données par le `Capabilities Pointer`.
@@ -272,7 +272,7 @@ Avant d'utiliser d'aller plus loin dans la configuration du périphérique nous 
 
 Ici dans le cas spécifique des Input device les bits de features sont sont pas utilisé. Je renvoi donc le lecteur vers la documentation Virtio pour plus de détails. (spec 3.1.1 biblio 1).
 
-## Etape 5 : FEATURE_OK
+### Etape 5 : FEATURE_OK
 
 Après avoir séléctionné les bits de features voulue, on doit dire au périphérique qu'on a fini.  
 On doit donc mettre le bit `VIRTIO_STATUS_FEATURES_OK` du registre `device_status` à 1.
