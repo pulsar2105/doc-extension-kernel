@@ -481,7 +481,6 @@ void handle_mouse_event(virtio_input_event *event) {
             if (mouse_y >= DISPLAY_HEIGHT) {
                 mouse_y = DISPLAY_HEIGHT - 1;
             }
-
             INPUTS_DBG("[Mouse] pos: x=%d y=%d\n", mouse_x, mouse_y);
             break;
         case Wheel:

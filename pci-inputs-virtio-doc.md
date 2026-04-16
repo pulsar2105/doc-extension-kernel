@@ -516,6 +516,113 @@ if (notify_addr != 0) {
 
 A partir de maintenant on va recevoir des interruptions depuis le PLIC qu'il va falloir gérer. Les parties suivantes vont traiter ces points.
 
+### Keyboard handler
+
+Pour recevoir les events provenant du clavier nous devons sépcifier un handler :
+
+```C
+void handle_keyboard_event(virtio_input_event *event);
+```
+
+Le handler est appelé depuis le `trap_handler` des interruptions et permet de gérer les events ad-hoc du clavier et de la souris.
+Les events du clavier sont avec la structure suivantes :
+
+```C
+typedef enum { Sync = 0, Key = 1, Relative = 2, Absolute = 3 } input_event_type;
+
+typedef struct __attribute__((packed)) {
+    uint16_t event_type;
+    uint16_t code;
+    uint32_t value;
+} virtio_input_event;
+```
+
+Le champ `code` permet de connaitre le code de la touche du clavier. J'ai remapper tous le clavier et dans le cas d'un AZERTY voilà la liste des code :
+
+```C
+volatile uint8_t key_to_ascii_std[126] = {
+    0x1B, 0,    '&',   0xE9, '"', '\'',  '(', '-', 0xE8, '_', 0xE7, 0xE0, ')',
+    '=',  127,  ENTER, 'a',  'z', 'e',   'r', 't', 'y',  'u', 'i',  'o',  'p',
+    0,    '$',  '\r',  0,    'q', 's',   'd', 'f', 'g',  'h', 'j',  'k',  'l',
+    'm',  0xF9, 0xB2,  0,    '*', 'w',   'x', 'c', 'v',  'b', 'n',  ',',  ';',
+    ':',  '!',  0,     '*',  0,   ' ',   0,   0,   0,    0,   0,    0,    0,
+    0,    0,    0,     0,    0,   0,     '7', '8', '9',  '-', '4',  '5',  '6',
+    '+',  '1',  '2',   '3',  0,   '.',   0,   0,   '<',  0,   0,    0,    0,
+    0,    0,    0,     0,    0,   ENTER, 0,   '/', 0,    0,   0,    0,    0,
+    0,    0,    0,     0,    0,   0,     0,   0,   0,    0,   0,    0,    0,
+    0,    0,    0,     0,    0,   0,     0,   0,   SUPER};
+volatile uint8_t key_to_ascii_maj[126] = {
+    0x1B,  0,   '1', '2',   '3',  '4',  '5', '6',  '7', '8',      '9', '0',
+    0xB0,  '+', 127, ENTER, 'A',  'Z',  'E', 'R',  'T', 'Y',      'U', 'I',
+    'O',   'P', 0,   0xA3,  '\r', 0,    'Q', 'S',  'D', 'F',      'G', 'H',
+    'J',   'K', 'L', 'M',   0x25, 0x7E, 0,   0xB5, 'W', 'X',      'C', 'V',
+    'B',   'N', '?', '.',   '/',  0xA7, 0,   '*',  0,   ' ',      0,   0,
+    0,     0,   0,   0,     0,    0,    0,   0,    0,   VERR_NUM, 0,   '7',
+    '8',   '9', '-', '4',   '5',  '6',  '+', '1',  '2', '3',      0,   '.',
+    0,     0,   '>', 0,     0,    0,    0,   0,    0,   0,        0,   0,
+    ENTER, 0,   '/', 0,     0,    0,    0,   0,    0,   0,        0,   0,
+    0,     0,   0,   0,     0,    0,    0,   0,    0,   0,        0,   0,
+    0,     0,   0,   0,     0,    SUPER};
+volatile uint8_t key_to_ascii_alt_gr[126] = {
+    0x1B,  0,    0xB9, 0x7E,  '#',  '{',  '[',  '|',  '`',  '\\', '^', '@',
+    ']',   '}',  127,  ENTER, 0xE6, 0xAB, 0x80, 0xB6, 0,    0,    0,   0,
+    0xD8,  0xDE, 0,    0xA4,  '\r', 0,    '@',  0xDF, 0xD0, 0,    0,   0,
+    0,     0,    0,    0xB5,  0,    0xAC, 0,    '*',  'w',  'x',  'c', 'v',
+    'b',   'n',  ',',  ';',   ':',  '!',  0,    '*',  0,    ' ',  0,   0,
+    0,     0,    0,    0,     0,    0,    0,    0,    0,    0,    0,   '7',
+    '8',   '9',  '-',  '4',   '5',  '6',  '+',  '1',  '2',  '3',  0,   '.',
+    0,     0,    '<',  0,     0,    0,    0,    0,    0,    0,    0,   0,
+    ENTER, 0,    '/',  0,     0,    0,    0,    0,    0,    0,    0,   0,
+    0,     0,    0,    0,     0,    0,    0,    0,    0,    0,    0,   0,
+    0,     0,    0,    0,     0,    SUPER};
+```
+
+Après libre à vous de trouver un moyen de gérer les touches spéciales, Maj, Alt, Altg, Verr_maj etc...
+
+### Mouse handler
+
+Dans le cas du handler souris la structure est à peut près la même :
+
+```C
+void handle_mouse_event(virtio_input_event *event);
+```
+
+Le champ `event_type` décris le type d'event qui arrive depuis la souris.
+
+- `Relative` indique que l'event est la position de la souris OU la roulette de la souris. Et dans ce cas là le champ value stocke le delta entre l'ancienne position et la nouvelle de la souris OU de la souris. NB. Ce delta peut être négatif.
+- `Pressed` indique que l'event est un bouton préssé. Et ainsi le champ code décris le bouton qui a été modifié. NB.
+
+Je vous donne les valeurs qui peuvent être soit retrouver dans la documentation Oasis ou retrouvée en testant la souris à la main.
+
+```C
+typedef enum { Sync = 0, Key = 1, Relative = 2, Absolute = 3 } input_event_type;
+
+typedef enum { X = 0, Y = 1, Wheel = 8 } input_event_code_relative;
+
+typedef enum {
+    LB = 272,
+    RB = 273,
+    MB = 274,
+    WHEEL_DOWN = 336,
+    WHEEL_UP = 337
+} input_event_code_abs;
+
+typedef enum {
+    Released = 0,
+    Pressed = 1,
+    Automatic_Repetition = 2,
+} input_event_code_value;
+
+typedef enum {
+    BUTTON_UP = 0,
+    BUTTON_DOWN = 1,
+} mouse_button_status;
+```
+
+## Conclusion
+
+J'ai décris les principaux mécanismes pour communiquer et utiliser les devices de type inputs. Le reste est à votre appréciation. AMusez vous bien.
+
 ## Biblio
 
 Documentation générale des virtio :
