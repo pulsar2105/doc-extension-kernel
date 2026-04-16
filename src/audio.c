@@ -168,8 +168,6 @@ void initialise_audio(volatile pci_header_t0x0 *pci_header) {
      * virtqueues.
      */
 
-    /* */
-
     /* Configure controlq (queue 0) */
     cfg->queue_select = 0;
     cfg->queue_size = (uint16_t)QUEUE_SIZE_AUDIO;
@@ -512,7 +510,7 @@ void play_beep() {
     AUDIO_DBG("[audio] Audio data sent (size=%u bytes)\n",
               NUM_SAMPLES * 2 * (uint32_t)sizeof(int16_t));
 
-    /* Wait for used ring update with timeout */
+    /* wait for used ring update with timeout */
     volatile virtq_used_audio *used = &virtio_audio_dev.txq.used_ring;
     uint16_t start_used = used->idx;
 

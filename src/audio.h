@@ -77,17 +77,6 @@ enum {
 /* Virtqueue descriptor flags */
 enum { VIRTQ_DESC_F_NEXT = 1, VIRTQ_DESC_F_WRITE = 2 };
 
-/*
- * Config spécifique au périphérique virtio-sound.
- * Accessible via la capability VIRTIO_PCI_CAP_DEVICE_CFG.
- */
-struct __attribute__((packed, aligned(4))) virtio_snd_config {
-    uint32_t jacks;    // Nombre de jacks audio
-    uint32_t streams;  // Nombre de flux PCM
-    uint32_t chmaps;   // Nombre de channel maps
-    uint32_t controls; // Nombre de contrôles (volume, etc.)
-};
-
 /* Virtqueue descriptor */
 typedef struct {
     uint64_t addr;

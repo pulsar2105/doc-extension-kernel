@@ -401,12 +401,12 @@ Chaque entrée de la file d'attente est un couple : « id » indique l'entrée d
 
 Dans cette section nous allons voir comment utiliser les périphériques virtio inputs.
 
-### Mémoire
+### mémoire
 
 Nous devons stocker les informations générales à propos de ces périphériques donc il faut définir les structures précédemment, plus les emplacements mémoires dédiés :
 
 ```C
-``/* Virtio */
+/* Virtio */
 extern volatile input_virtio_device virtio_device_inputs[2];
 extern volatile uint8_t virtio_input_irqs[2];
 
@@ -421,6 +421,8 @@ extern volatile int32_t mouse_y;
 ```
 
 Les champs pour les souris seront utilisé un peu plus tard.
+
+NB. J'ai mis dans le fichier `virtio.h` des structures de données, notemment `cfg_virtio_device` qui permettent de stocker les données des devices.
 
 ### Configuration initiale
 

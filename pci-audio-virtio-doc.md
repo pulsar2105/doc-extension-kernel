@@ -292,23 +292,31 @@ Nous allons donc devoir mettre en place les Virtqueues (partie d'après).
 ### Etape 8 : Activation du périphérique
 
 Une fois la configuration terminer on doit activer le périphérique.  
-Il faut pour ça mettre le bit `VIRTIO_STATUS_DRIVER_OK` du registre `device_status` à 1.
+Il faut pour ça mettre le bit `VIRTIO_STATUS_DRIVER_OK` du registre `device_status` à 1. Et à partir de ce moment le device est actif et peut envoyer des interruptions etc...
 
 ## VIRTIO - Configuration Virtqueue
 
 Je recommande de créer une structure pour stocker toutes les informations utile à propos d'un device virtio :
 
 ```C
-/* Inputs virtio device structure, include virtio_device */
+/* Virtqueue */
 typedef struct {
-    cfg_virtio_device cfg_mem_map;             // cfg memory map
-    virtq queue0;                              // input virtqueue
-    virtio_input_event event_pool[QUEUE_SIZE]; // event pool
-    uint16_t last_used_idx;
-    uint32_t notify_off; // Multiplier from PCI notify capability (used to
-                         // compute notify address)
-    void (*handle_event)(virtio_input_event *event);
-} input_virtio_device;
+    virtq_desc_audio descriptors[QUEUE_SIZE_AUDIO];
+    virtq_avail_audio available_ring;
+    virtq_used_audio used_ring;
+} __attribute__((packed, aligned(4096))) virtq_audio;
+
+/* Audio device structure */
+typedef struct {
+    cfg_virtio_device cfg_mem_map;
+    virtq_audio controlq;
+    virtq_audio eventq;
+    virtq_audio txq;
+    virtq_audio rxq;
+    uint16_t last_used_idx_ctrl;
+    uint16_t last_used_idx_tx;
+    uint32_t notify_off;
+} audio_virtio_device;
 ```
 
 Pour pouvoir communiquer avec les périphériques virtio nous devons utiliser des virtqueue.  
@@ -344,7 +352,7 @@ typedef struct {
     uint32_t len;   // Length
     uint16_t flags; // The flags as indicated above.
     uint16_t next;  // Next field if flags & NEXT
-} __attribute__((packed, aligned(4))) virtq_desc;
+} __attribute__((packed, aligned(4))) virtq_desc_audio;
 ```
 
 La table descriptor est la partie buffer du driver pour le périphérique. L'adresse `addr` réfère à un emplacement mémoire qui permet de stocker les messages envoyé et reçu par le périphérique et le driver, ici une case de `event_pool`.  
@@ -360,7 +368,7 @@ typedef struct {
     uint16_t idx; // ATOMIC INSTRUCT
     uint16_t ring[QUEUE_SIZE];
     uint16_t used_event; // Only if VIRTIO_F_EVENT_IDX
-} __attribute__((packed, aligned(4))) virtq_avail;
+} __attribute__((packed, aligned(4))) virtq_avail_audio;
 ```
 
 Le driver utilise l'available ring pour proposer des buffers au périphérique : chaque entrée de la liste correspond à la tête d'une chaîne de descripteurs. Elle est uniquement écrite par le pilote et lue par le périphérique.  
@@ -384,7 +392,7 @@ typedef struct {
      * the buffer described by the descriptor chain.
      */
     uint32_t len;
-} __attribute__((packed, aligned(4))) virtq_used_elem;
+} __attribute__((packed, aligned(4))) virtq_used_elem_audio;
 
 /* The device writes used elements into this ring. */
 typedef struct {
@@ -392,11 +400,344 @@ typedef struct {
     uint16_t idx; // ATOMIC INSTRUCT
     virtq_used_elem ring[QUEUE_SIZE];
     uint16_t avail_event; // Only if VIRTIO_F_EVENT_IDX
-} __attribute__((packed, aligned(4))) virtq_used;
+} __attribute__((packed, aligned(4))) virtq_used_audio;
 ```
 
 La file d'attente « used » est l'endroit où le périphérique renvoie les buffers une fois qu'il en a fini avec eux : elle est uniquement écrite par le périphérique et lue par le driver.
 Chaque entrée de la file d'attente est un couple : « id » indique l'entrée de tête de la chaîne de descripteurs décrivant le buffer (celle-ci correspond à une entrée placée précédemment dans la file d'attente « available » par l'invité), et « len » le nombre total d'octets écrits dans le buffer.
+
+## Implémentation
+
+Dans cette section nous allons voir comment utiliser les périphériques virtio audios.
+
+### mémoire
+
+Nous devons stocker les informations générales à propos de ces périphériques donc il faut définir les structures précédemment, plus les emplacements mémoires dédiés :
+
+```C
+extern volatile cfg_virtio_device cfg_types_found_audio;
+extern volatile audio_virtio_device virtio_audio_dev;
+extern volatile uint8_t virtio_audio_irq;
+```
+
+NB. J'ai mis dans le fichier `virtio.h` des structures de données, notemment `cfg_virtio_device` qui permettent de stocker les données des devices.
+
+### Configuration initiale
+
+On reprend le code principale à l'étape 7 et 8 en rajoutant la configuration de la virtqueue.
+
+Il faut configurer les virtqueues `controlq`, `eventq`, `txq`, `rxq`. Pour cela on séléctionne cellel que l'on souhaite initialiser et on spécifie ça taille (128 éléments arbitrairement ici). Comme la méthode est répétitive, je vous montre pour configurer `controlq` et je vous laisse configurer les autres :
+
+```C
+/* Configure controlq (queue 0) */
+cfg->queue_select = 0;
+cfg->queue_size = (uint16_t)QUEUE_SIZE_AUDIO;
+cfg->queue_desc = (uint64_t)&virtio_audio_dev.controlq.descriptors;
+cfg->queue_driver = (uint64_t)&virtio_audio_dev.controlq.available_ring;
+cfg->queue_device = (uint64_t)&virtio_audio_dev.controlq.used_ring;
+
+/* Initialize control queue indices */
+virtio_audio_dev.last_used_idx_ctrl = 0;
+virtio_audio_dev.controlq.available_ring.idx = 0;
+
+/* Queue activation */
+__asm__ __volatile__("fence" ::: "memory");
+cfg->queue_enable = 1;
+```
+
+Après ça on doit récupérer `notify multiplier` pour pouvoir notifier au device que l'on a envoyer un buffer par une virtqueue.
+
+```C
+/* Get notify multiplier from capability (preferred) */
+if (cfg_types_found_audio.notify_off_multiplier != 0) {
+    virtio_audio_dev.notify_off =
+        cfg_types_found_audio.notify_off_multiplier;
+} else {
+    /* Fallback: read first dword at notify_cfg (legacy pattern) */
+    if (virtio_audio_dev.cfg_mem_map.notify_cfg != 0) {
+        virtio_audio_dev.notify_off =
+            *((volatile uint32_t *)virtio_audio_dev.cfg_mem_map.notify_cfg);
+    } else {
+        AUDIO_DBG("[audio] WARNING: notify_cfg absent\n");
+        virtio_audio_dev.notify_off = 4; /* safe default */
+    }
+}
+```
+
+## Jouer du son (beeeppp !)
+
+Maintenant que le device est configuré nous allons pouvoir nous en servir pour jouer du son. Pour des raisons de simplicité nous nn'allons que jouer une note, un gros beep comme proof of concept.
+
+Pour cela nous devons utiliser le système de `PCM Control Messages` spécifier dans la documentation Oasis 5.14.6.6. Voilà les structures de données que nous allons utiliser (qui viennent de Oasis) :
+
+```C
+/* VirtIO Sound control request header */
+typedef struct {
+    uint32_t code;
+} __attribute__((packed)) virtio_snd_hdr;
+
+/* VirtIO Sound PCM set params request */
+typedef struct {
+    virtio_snd_hdr hdr;
+    uint32_t stream_id;
+    uint32_t buffer_bytes;
+    uint32_t period_bytes;
+    uint32_t features;
+    uint8_t channels;
+    uint8_t format;
+    uint8_t rate;
+    uint8_t padding;
+} __attribute__((packed, aligned(4))) virtio_snd_pcm_set_params;
+
+/* VirtIO Sound simple request (for prepare, start, stop) */
+typedef struct {
+    virtio_snd_hdr hdr;
+    uint32_t stream_id;
+} __attribute__((packed, aligned(4))) virtio_snd_pcm_simple;
+
+/* VirtIO Sound status response */
+typedef struct {
+    uint32_t status;
+} __attribute__((packed, aligned(4))) virtio_snd_status;
+
+/* VirtIO Sound PCM transfer header */
+typedef struct {
+    uint32_t stream_id;
+} __attribute__((packed, aligned(4))) virtio_snd_pcm_xfer;
+```
+
+### Configuration PCM générale
+
+Le device ne peut pas deviner les paramètres que l'on souhaite avoir pour jouer le morceau de son. Donc on doit lui dire avec une requete virtqueue.
+
+On va suivre la structure des requetes PCM comme décris dans la documenation Oasis.
+
+### Etape 1 : Set PCM parameters
+
+La première étape est de spécifier le type de son que l'on va jouer :
+
+NB. Le constantes viennent de la documentation, je ne les ai pas mise pour des questions de place (y a beaucoup de champs).
+
+```C
+/* Step 1: Set PCM parameters */
+volatile virtio_snd_pcm_set_params set_params;
+volatile virtio_snd_status status_response;
+
+/* Calculate buffer size for 200ms at 44.1kHz stereo S16 (2 bytes) */
+/* 48000 * 0.2 * 2 channels * 2 bytes = 38400 bytes */
+uint32_t buffer_size = (SAMPLE_RATE * DURATION_MS * 2 * 2) / 1000;
+
+set_params.hdr.code = VIRTIO_SND_R_PCM_SET_PARAMS;
+set_params.stream_id = 0;
+set_params.buffer_bytes = buffer_size;
+set_params.period_bytes = buffer_size; // Single period
+set_params.features = 0;
+set_params.channels = 2;
+set_params.format = VIRTIO_SND_PCM_FMT_S16;
+set_params.rate = VIRTIO_SND_PCM_RATE_5512;
+set_params.padding = 0;
+```
+
+Une fois les paramètres définies on doit les envoyers au device. Nous allons utiliser une fonction standard pour envoyer une requete virtqueue et recevoir une réponse. Je vous donne le code pour faire la requete :
+
+```C
+/* Helper to send a control command to the audio device */
+static void send_control_command(volatile void *request, uint32_t request_len,
+                                 volatile void *response,
+                                 uint32_t response_len) {
+    volatile virtio_pci_common_cfg *cfg =
+        (volatile virtio_pci_common_cfg *)
+            virtio_audio_dev.cfg_mem_map.common_cfg;
+
+    uint16_t idx =
+        virtio_audio_dev.controlq.available_ring.idx % QUEUE_SIZE_AUDIO;
+    uint16_t desc_idx = idx;
+
+    /* First descriptor: request (device reads) */
+    virtio_audio_dev.controlq.descriptors[desc_idx].addr = (uint64_t)request;
+    virtio_audio_dev.controlq.descriptors[desc_idx].len = request_len;
+    virtio_audio_dev.controlq.descriptors[desc_idx].flags = VIRTQ_DESC_F_NEXT;
+    virtio_audio_dev.controlq.descriptors[desc_idx].next =
+        (desc_idx + 1) % QUEUE_SIZE_AUDIO;
+
+    /* Second descriptor: response (device writes) */
+    uint16_t resp_idx = (desc_idx + 1) % QUEUE_SIZE_AUDIO;
+    virtio_audio_dev.controlq.descriptors[resp_idx].addr = (uint64_t)response;
+    virtio_audio_dev.controlq.descriptors[resp_idx].len = response_len;
+    virtio_audio_dev.controlq.descriptors[resp_idx].flags = VIRTQ_DESC_F_WRITE;
+    virtio_audio_dev.controlq.descriptors[resp_idx].next = 0;
+
+    /* Add to available ring */
+    virtio_audio_dev.controlq.available_ring.ring[idx] = desc_idx;
+
+    __asm__ __volatile__("fence" ::: "memory");
+
+    virtio_audio_dev.controlq.available_ring.idx++;
+
+    /* Notify the device (queue 0) */
+    cfg->queue_select = 0;
+    uint64_t notify_base = virtio_audio_dev.cfg_mem_map.notify_cfg;
+    uint64_t notify_addr =
+        notify_base + ((uint64_t)cfg->queue_notify_off *
+                       (uint64_t)virtio_audio_dev.notify_off);
+
+    __asm__ __volatile__("fence" ::: "memory");
+
+    if (notify_addr != 0) {
+        *((volatile uint16_t *)notify_addr) = 0;
+    }
+
+    /* Wait for response */
+    volatile virtq_used_audio *used = &virtio_audio_dev.controlq.used_ring;
+    while (virtio_audio_dev.last_used_idx_ctrl == used->idx) {
+        /* busy wait */
+    }
+
+    virtio_audio_dev.last_used_idx_ctrl = used->idx;
+}
+```
+
+On n'a plus qu'a utiliser cete fonction pour envoyer `set_params`, récupérer la réponse et vérifier que la réponse est bien égale à `VIRTIO_SND_OK`.
+
+### Etape 2 : Prepapre Stream
+
+En suite il faut dire au device de préparer le stream. C'est à dire envoyer un requete PCM simple :
+
+```C
+volatile virtio_snd_pcm_simple prepare_cmd;
+prepare_cmd.hdr.code = VIRTIO_SND_R_PCM_PREPARE;
+prepare_cmd.stream_id = 0;
+```
+
+### Etape 3 : Start Stream
+
+Maintenant que l'on a préparer le stream il faut le démmarrer pour commencer à jouer le son. Le manoeuvre est similaire à la précédente :
+
+```C
+volatile virtio_snd_pcm_simple start_cmd;
+start_cmd.hdr.code = VIRTIO_SND_R_PCM_START;
+start_cmd.stream_id = 0;
+```
+
+### Etape 4 : Génerer le sample à jouer et l'envoyer
+
+Le périphérique audio joue un sample en amplitude et non en fréquence. Donc nous devons lui envoyer le graphe en amplitude de notre son. J'ai choisi à La3 440Hz rectangulaire. LE code ci-dessous permet de créer le graphe et le stocker dans un buffer.
+
+```C
+volatile int16_t audio_buffer[NUM_SAMPLES * 2] __attribute__((aligned(16)));
+
+/* Generate a simple square wave */
+for (int i = 0; i < NUM_SAMPLES; i++) {
+    /* Simple square wave for testing - audible volume */
+    int16_t sample;
+    int phase = (i * FREQUENCY) / SAMPLE_RATE;
+
+    if (phase % 2 == 0) {
+        sample = SND_VOLUME;
+    } else {
+        sample = -SND_VOLUME; /* Negative */
+    }
+
+    audio_buffer[i * 2] = sample;     /* Left channel */
+    audio_buffer[i * 2 + 1] = sample; /* Right channel */
+}
+```
+
+En suite, il faut l'envoyer au device via la virtqueue TX (l'entrée) suivant le même mécanisme que les requete utilisé plus haut :
+
+```C
+volatile virtio_snd_pcm_xfer xfer_hdr;
+xfer_hdr.stream_id = 0;
+
+uint16_t idx = virtio_audio_dev.txq.available_ring.idx % QUEUE_SIZE_AUDIO;
+uint16_t desc_idx = idx;
+
+/* First descriptor: transfer header */
+virtio_audio_dev.txq.descriptors[desc_idx].addr = (uint64_t)&xfer_hdr;
+virtio_audio_dev.txq.descriptors[desc_idx].len = sizeof(xfer_hdr);
+virtio_audio_dev.txq.descriptors[desc_idx].flags = VIRTQ_DESC_F_NEXT;
+virtio_audio_dev.txq.descriptors[desc_idx].next =
+    (desc_idx + 1) % QUEUE_SIZE_AUDIO;
+
+/* Second descriptor: audio data (device reads) */
+uint16_t data_idx = (desc_idx + 1) % QUEUE_SIZE_AUDIO;
+virtio_audio_dev.txq.descriptors[data_idx].addr = (uint64_t)audio_buffer;
+virtio_audio_dev.txq.descriptors[data_idx].len =
+    NUM_SAMPLES * 2 * sizeof(int16_t);
+virtio_audio_dev.txq.descriptors[data_idx].flags =
+    VIRTQ_DESC_F_NEXT; /* device reads */
+virtio_audio_dev.txq.descriptors[data_idx].next =
+    (data_idx + 1) % QUEUE_SIZE_AUDIO;
+
+/* Third descriptor: status (device writes) */
+static virtio_snd_status xfer_status;
+uint16_t status_idx = (data_idx + 1) % QUEUE_SIZE_AUDIO;
+xfer_status.status = 0;
+virtio_audio_dev.txq.descriptors[status_idx].addr = (uint64_t)&xfer_status;
+virtio_audio_dev.txq.descriptors[status_idx].len = sizeof(xfer_status);
+virtio_audio_dev.txq.descriptors[status_idx].flags = VIRTQ_DESC_F_WRITE;
+virtio_audio_dev.txq.descriptors[status_idx].next = 0;
+
+/* Add to available ring */
+virtio_audio_dev.txq.available_ring.ring[idx] = desc_idx;
+
+__asm__ __volatile__("fence" ::: "memory");
+
+virtio_audio_dev.txq.available_ring.idx++;
+
+/* Notify the device (queue 2) */
+cfg->queue_select = 2;
+uint64_t notify_base = virtio_audio_dev.cfg_mem_map.notify_cfg;
+uint64_t notify_addr =
+    notify_base + ((uint64_t)cfg->queue_notify_off *
+                    (uint64_t)virtio_audio_dev.notify_off);
+
+__asm__ __volatile__("fence" ::: "memory");
+
+if (notify_addr != 0) {
+    write_mem16(notify_addr, 0, 2);
+}
+```
+
+L'envoie des données est sous la forme d'une liste chainé ou l'on spécifie la case du buffer suivante dans le champs `next` de `txq`. Après avoir ajouté le buffer audio il faut évidement notifier le device de cet ajout pour qu'il puisse le lire. Pour cela on écrit dans le champ de notification de le queue 2 càd `txq`.
+
+A partir de maintenant le device est normalement en train de jouer le sample. Du point de vue d'un OS c'est TRES long (plusieurs ms). Donc il faut attendre qu'il ai fini pour terminer la transaction correctemnt.
+
+```C
+/* wait for used ring update with timeout */
+volatile virtq_used_audio *used = &virtio_audio_dev.txq.used_ring;
+uint16_t start_used = used->idx;
+
+while (used->idx == start_used) {
+    hlt();
+}
+```
+
+### Etape 5 : Stop Stream
+
+A partir de là on considère que le device a terminé de jouer le sample et nous pouvons terminer la transaction :
+
+```C
+/* Step 5: Stop stream */
+static virtio_snd_pcm_simple stop_cmd;
+stop_cmd.hdr.code = VIRTIO_SND_R_PCM_STOP;
+stop_cmd.stream_id = 0;
+```
+
+### Etape 6 : Release Stream
+
+Et en fin il est nécessaire de relacher le stream que l'on utilisait pour le rendre accéssible.
+
+```C
+/* Step 6: Release stream */
+static virtio_snd_pcm_simple release_cmd;
+release_cmd.hdr.code = VIRTIO_SND_R_PCM_RELEASE;
+release_cmd.stream_id = 0;
+```
+
+## Conclusion
+
+Mes félicitations ! Normalement si vous arrivé jusque l'a c'est que vous vous êtes accroché et que vous avez réussi à attendre un joli beep depuis votre ordinateur. L'étape d'après et de jouer de la musique mais je laisse les lecteurs motivesr et ambitieux continuer cette grande aventure pour qui sait devenir le prochain LInux Torvals du monde.
 
 ## Biblio
 
